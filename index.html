@@ -95,6 +95,10 @@
         background: var(--ink);
       }
 
+      .app.is-loading .status-dot::before {
+        animation: pulse 1s ease-in-out infinite;
+      }
+
       .hero {
         padding: 8px 0 4px;
       }
@@ -251,6 +255,19 @@
         text-transform: uppercase;
       }
 
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(0.72);
+          opacity: 0.45;
+        }
+
+        50% {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+
       @media (min-width: 480px) {
         .app {
           padding: 30px 26px 30px;
@@ -263,7 +280,7 @@
     </style>
   </head>
   <body>
-    <main class="app" aria-label="Pickleball indoor or outdoor forecast">
+    <main class="app is-loading" aria-label="Pickleball indoor or outdoor forecast">
       <header class="topbar">
         <div class="brand">
           <p class="kicker">Court forecast</p>
@@ -273,72 +290,246 @@
       </header>
 
       <section class="hero" aria-labelledby="today-title">
-        <p class="hero-label" id="today-title">Today</p>
-        <p class="decision">
-          <span>Play</span>
-          <span>Inside</span>
+        <p class="hero-label" id="today-title">Seattle today</p>
+        <p class="decision" id="today-decision">
+          <span>Checking</span>
+          <span>Courts</span>
         </p>
-        <p class="reason">Windy courts and a slick surface risk. Book the indoor slot.</p>
+        <p class="reason" id="today-reason">Pulling the latest Seattle forecast.</p>
       </section>
 
       <section class="meta" aria-label="Today's court factors">
         <div class="meta-item">
           <span class="meta-title">Court read</span>
-          <span class="meta-value">Risky</span>
+          <span class="meta-value" id="court-read">...</span>
         </div>
         <div class="meta-item">
           <span class="meta-title">Confidence</span>
-          <span class="meta-value">High</span>
+          <span class="meta-value" id="confidence">...</span>
         </div>
       </section>
 
-      <section class="days" aria-label="Upcoming pickleball calls">
-        <article class="day-card is-indoor">
-          <p class="day-name">Mon<br>27</p>
-          <div class="play-call">
-            <div class="play-place">
-              <strong>Indoor</strong>
-              <small>Gusts and damp lines</small>
-            </div>
-            <span class="badge" aria-label="Indoor">I</span>
-          </div>
-        </article>
-
-        <article class="day-card is-outdoor">
-          <p class="day-name">Tue<br>28</p>
-          <div class="play-call">
-            <div class="play-place">
-              <strong>Outdoor</strong>
-              <small>Dry court window</small>
-            </div>
-            <span class="badge" aria-label="Outdoor">O</span>
-          </div>
-        </article>
-
-        <article class="day-card is-outdoor">
-          <p class="day-name">Wed<br>29</p>
-          <div class="play-call">
-            <div class="play-place">
-              <strong>Outdoor</strong>
-              <small>Calm enough to rally</small>
-            </div>
-            <span class="badge" aria-label="Outdoor">O</span>
-          </div>
-        </article>
-
-        <article class="day-card is-indoor">
-          <p class="day-name">Thu<br>30</p>
-          <div class="play-call">
-            <div class="play-place">
-              <strong>Indoor</strong>
-              <small>Late rain chance</small>
-            </div>
-            <span class="badge" aria-label="Indoor">I</span>
-          </div>
-        </article>
+      <section class="days" id="days" aria-label="Upcoming pickleball calls">
       </section>
 
-      <p class="footer-note">Prototype only. Real weather data comes later.</p>
+      <p class="footer-note" id="source-note">Seattle WA via Open-Meteo</p>
     </main>
+
+    <script>
+      const seattle = {
+        latitude: 47.6062,
+        longitude: -122.3321,
+        timezone: "America/Los_Angeles",
+      };
+
+      const fallbackConditions = [
+        { maxTemp: 58, minTemp: 47, precipChance: 58, precipTotal: 0.08, windMax: 12, gustMax: 24 },
+        { maxTemp: 62, minTemp: 49, precipChance: 22, precipTotal: 0, windMax: 9, gustMax: 17 },
+        { maxTemp: 64, minTemp: 50, precipChance: 18, precipTotal: 0, windMax: 8, gustMax: 15 },
+        { maxTemp: 57, minTemp: 46, precipChance: 48, precipTotal: 0.04, windMax: 11, gustMax: 20 },
+      ];
+
+      const app = document.querySelector(".app");
+      const todayDecision = document.querySelector("#today-decision");
+      const todayReason = document.querySelector("#today-reason");
+      const courtRead = document.querySelector("#court-read");
+      const confidence = document.querySelector("#confidence");
+      const days = document.querySelector("#days");
+      const sourceNote = document.querySelector("#source-note");
+
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        day: "numeric",
+        timeZone: seattle.timezone,
+      });
+      const isoDateFormatter = new Intl.DateTimeFormat("en-US", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        timeZone: seattle.timezone,
+      });
+
+      function buildForecastUrl() {
+        const params = new URLSearchParams({
+          latitude: seattle.latitude,
+          longitude: seattle.longitude,
+          timezone: seattle.timezone,
+          forecast_days: "4",
+          temperature_unit: "fahrenheit",
+          wind_speed_unit: "mph",
+          precipitation_unit: "inch",
+          daily: [
+            "temperature_2m_max",
+            "temperature_2m_min",
+            "precipitation_probability_max",
+            "precipitation_sum",
+            "wind_speed_10m_max",
+            "wind_gusts_10m_max",
+          ].join(","),
+        });
+
+        return `https://api.open-meteo.com/v1/forecast?${params}`;
+      }
+
+      function normalizeForecast(data) {
+        return data.daily.time.map((date, index) => ({
+          date,
+          maxTemp: data.daily.temperature_2m_max[index],
+          minTemp: data.daily.temperature_2m_min[index],
+          precipChance: data.daily.precipitation_probability_max[index],
+          precipTotal: data.daily.precipitation_sum[index],
+          windMax: data.daily.wind_speed_10m_max[index],
+          gustMax: data.daily.wind_gusts_10m_max[index],
+        }));
+      }
+
+      function getFallbackForecast() {
+        const today = new Date();
+
+        return fallbackConditions.map((conditions, index) => {
+          const date = new Date(today);
+          date.setDate(today.getDate() + index);
+          const parts = isoDateFormatter.formatToParts(date);
+          const year = parts.find((part) => part.type === "year").value;
+          const month = parts.find((part) => part.type === "month").value;
+          const day = parts.find((part) => part.type === "day").value;
+
+          return {
+            ...conditions,
+            date: `${year}-${month}-${day}`,
+          };
+        });
+      }
+
+      function getCourtCall(day) {
+        const reasons = [];
+        const precipChance = Math.round(day.precipChance ?? 0);
+        const precipTotal = Number(day.precipTotal ?? 0);
+        const gustMax = Math.round(day.gustMax ?? 0);
+        const windMax = Math.round(day.windMax ?? 0);
+        const maxTemp = Math.round(day.maxTemp ?? 0);
+
+        if (precipChance >= 45 || precipTotal >= 0.05) {
+          reasons.push("wet court risk");
+        }
+
+        if (gustMax >= 22 || windMax >= 17) {
+          reasons.push("windy rallies");
+        }
+
+        if (maxTemp < 45) {
+          reasons.push("too cold");
+        }
+
+        if (maxTemp > 95) {
+          reasons.push("too hot");
+        }
+
+        const isOutdoor = reasons.length === 0;
+        const detail = isOutdoor
+          ? `${maxTemp}F, ${precipChance}% rain, ${gustMax} mph gusts`
+          : reasons.join(" and ");
+
+        return {
+          place: isOutdoor ? "Outdoor" : "Indoor",
+          badge: isOutdoor ? "O" : "I",
+          read: isOutdoor ? "Clear" : "Risky",
+          confidence: getConfidence(day, isOutdoor),
+          reason: isOutdoor ? "Dry enough with playable wind. Take it outside." : `Go indoor: ${detail}.`,
+          detail,
+          isOutdoor,
+        };
+      }
+
+      function getConfidence(day, isOutdoor) {
+        const precipChance = Number(day.precipChance ?? 0);
+        const gustMax = Number(day.gustMax ?? 0);
+        const maxTemp = Number(day.maxTemp ?? 0);
+
+        if (!isOutdoor && (precipChance >= 65 || gustMax >= 28 || maxTemp < 40 || maxTemp > 100)) {
+          return "High";
+        }
+
+        if (isOutdoor && precipChance <= 20 && gustMax <= 16 && maxTemp >= 50 && maxTemp <= 88) {
+          return "High";
+        }
+
+        return "Medium";
+      }
+
+      function getDayLabel(date) {
+        const parts = formatter.formatToParts(new Date(`${date}T12:00:00`));
+        const weekday = parts.find((part) => part.type === "weekday").value;
+        const day = parts.find((part) => part.type === "day").value;
+
+        return `${weekday}<br>${day}`;
+      }
+
+      function renderForecast(forecast) {
+        const calls = forecast.map((day) => ({
+          ...day,
+          call: getCourtCall(day),
+        }));
+        const today = calls[0];
+
+        todayDecision.innerHTML = `<span>Play</span><span>${today.call.isOutdoor ? "Outside" : "Inside"}</span>`;
+        todayReason.textContent = today.call.reason;
+        courtRead.textContent = today.call.read;
+        confidence.textContent = today.call.confidence;
+
+        days.replaceChildren(
+          ...calls.map((day) => {
+            const card = document.createElement("article");
+            card.className = `day-card ${day.call.isOutdoor ? "is-outdoor" : "is-indoor"}`;
+
+            const dayName = document.createElement("p");
+            dayName.className = "day-name";
+            dayName.innerHTML = getDayLabel(day.date);
+
+            const playCall = document.createElement("div");
+            playCall.className = "play-call";
+
+            const playPlace = document.createElement("div");
+            playPlace.className = "play-place";
+
+            const place = document.createElement("strong");
+            place.textContent = day.call.place;
+
+            const detail = document.createElement("small");
+            detail.textContent = day.call.detail;
+
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.setAttribute("aria-label", day.call.place);
+            badge.textContent = day.call.badge;
+
+            playPlace.append(place, detail);
+            playCall.append(playPlace, badge);
+            card.append(dayName, playCall);
+
+            return card;
+          }),
+        );
+      }
+
+      async function loadForecast() {
+        try {
+          const response = await fetch(buildForecastUrl());
+
+          if (!response.ok) {
+            throw new Error("Forecast request failed");
+          }
+
+          renderForecast(normalizeForecast(await response.json()));
+        } catch (error) {
+          renderForecast(getFallbackForecast());
+          sourceNote.textContent = "Offline Seattle fallback";
+        } finally {
+          app.classList.remove("is-loading");
+        }
+      }
+
+      loadForecast();
+    </script>
   </body>
 </html>
